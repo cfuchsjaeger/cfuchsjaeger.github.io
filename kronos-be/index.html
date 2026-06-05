@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Kronos Tearsheet — BE</title>
+<meta name="description" content="Kronos foundation-model forecast for Bloom Energy (BE). Research tool, not financial advice." />
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0a0e14; --panel:#111722; --panel-2:#0d131c; --line:#1e2733;
+    --ink:#e6edf3; --muted:#8b97a7; --faint:#5b6675;
+    --up:#27c08a; --down:#f0616d; --flat:#c9a227; --accent:#5aa9ff;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    -webkit-font-smoothing:antialiased;line-height:1.55}
+  .wrap{max-width:1040px;margin:0 auto;padding:32px 20px 80px}
+  header{display:flex;flex-wrap:wrap;align-items:baseline;gap:12px 16px;
+    border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:28px}
+  .brand{font-family:var(--mono);font-size:12px;letter-spacing:.18em;
+    text-transform:uppercase;color:var(--faint)}
+  h1{font-size:34px;margin:2px 0 0;letter-spacing:-.02em}
+  .ticker{font-family:var(--mono);color:var(--accent)}
+  .asof{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .badge{display:inline-block;font-family:var(--mono);font-size:11px;font-weight:600;
+    letter-spacing:.08em;text-transform:uppercase;padding:4px 9px;border-radius:6px;
+    border:1px solid currentColor}
+  .badge.wide{color:var(--flat)} .badge.moderate{color:var(--accent)} .badge.narrow{color:var(--up)}
+
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:26px}
+  @media(max-width:760px){.grid{grid-template-columns:repeat(2,1fr)}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:16px 16px 14px}
+  .card .k{font-family:var(--mono);font-size:11px;letter-spacing:.08em;
+    text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+  .card .v{font-size:24px;font-weight:650;font-family:var(--mono);letter-spacing:-.01em}
+  .card .sub{font-size:12px;color:var(--faint);margin-top:4px;font-family:var(--mono)}
+  .v.up{color:var(--up)} .v.down{color:var(--down)} .v.flat{color:var(--flat)}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:20px;margin-bottom:26px}
+  .panel h2{margin:0 0 14px;font-size:14px;font-family:var(--mono);letter-spacing:.06em;
+    text-transform:uppercase;color:var(--muted);font-weight:600}
+  .chart-box{position:relative;height:380px}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px;font-size:12px;
+    font-family:var(--mono);color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .swatch{width:14px;height:3px;border-radius:2px;display:inline-block}
+  .swatch.band{height:11px;border-radius:3px;opacity:.5}
+
+  .rules{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media(max-width:760px){.rules{grid-template-columns:1fr}}
+  .rule{border:1px solid var(--line);border-radius:10px;padding:13px 14px;background:var(--panel-2)}
+  .rule b{font-family:var(--mono);font-size:12px;letter-spacing:.05em}
+  .rule.narrow b{color:var(--up)} .rule.moderate b{color:var(--accent)} .rule.wide b{color:var(--flat)}
+  .rule p{margin:7px 0 0;font-size:13px;color:var(--muted)}
+  .rule.active{box-shadow:0 0 0 1px currentColor inset}
+  .rule.wide.active{color:var(--flat)}
+
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12.5px}
+  th,td{text-align:right;padding:7px 10px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+    font-size:10.5px;position:sticky;top:0;background:var(--panel)}
+  td:first-child,th:first-child{text-align:left;color:var(--ink)}
+  tbody tr:hover{background:var(--panel-2)}
+  .tbl-scroll{max-height:420px;overflow:auto;border-radius:8px}
+  td.dn{color:var(--down)} td.up{color:var(--up)}
+
+  .disclaimer{border:1px solid var(--line);border-left:3px solid var(--flat);
+    background:var(--panel-2);border-radius:10px;padding:16px 18px;margin-bottom:24px}
+  .disclaimer p{margin:0;color:var(--muted);font-size:13px}
+  .disclaimer b{color:var(--ink)}
+
+  details{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:0 18px;margin-bottom:24px}
+  summary{cursor:pointer;padding:16px 0;font-family:var(--mono);font-size:12px;
+    letter-spacing:.06em;text-transform:uppercase;color:var(--muted);outline:none}
+  details[open]{padding-bottom:18px}
+  pre{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;
+    padding:14px 16px;overflow:auto;font-family:var(--mono);font-size:12.5px;color:var(--ink);margin:6px 0 0}
+  .cmt{color:var(--faint)}
+
+  footer{border-top:1px solid var(--line);padding-top:18px;color:var(--faint);
+    font-size:12px;font-family:var(--mono);line-height:1.7}
+  footer a{color:var(--accent);text-decoration:none}
+  footer a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <div class="brand">Kronos Tearsheet</div>
+      <h1>Bloom Energy Corp · <span class="ticker">BE</span></h1>
+    </div>
+    <div class="asof">As of 2026-06-05 · 1y / 1d / 30-candle forecast</div>
+  </header>
+
+  <!-- Headline metrics -->
+  <div class="grid">
+    <div class="card">
+      <div class="k">Last Close</div>
+      <div class="v">$264.01</div>
+      <div class="sub">2026-06-05</div>
+    </div>
+    <div class="card">
+      <div class="k">Predicted Close · +30d</div>
+      <div class="v down">$145.33</div>
+      <div class="sub">2026-07-05 (horizon)</div>
+    </div>
+    <div class="card">
+      <div class="k">Direction</div>
+      <div class="v down">DOWN −44.95%</div>
+      <div class="sub">median path</div>
+    </div>
+    <div class="card">
+      <div class="k">Confidence Band</div>
+      <div class="v flat" style="font-size:20px">WIDE</div>
+      <div class="sub">$101.13 – $206.01 · ±39.73%</div>
+    </div>
+  </div>
+
+  <!-- Chart -->
+  <div class="panel">
+    <h2>Price · 3-month history → 30-day Kronos forecast</h2>
+    <div class="chart-box"><canvas id="chart"></canvas></div>
+    <div class="legend">
+      <span><i class="swatch" style="background:#e6edf3"></i>Historical close</span>
+      <span><i class="swatch" style="background:#f0616d;border-top:2px dashed #f0616d;height:0;width:16px"></i>Forecast median</span>
+      <span><i class="swatch band" style="background:#f0616d"></i>Forecast high–low envelope</span>
+    </div>
+  </div>
+
+  <!-- Interpretation -->
+  <div class="panel">
+    <h2>Interpretation rules</h2>
+    <div class="rules">
+      <div class="rule narrow">
+        <b>NARROW &lt;5%</b>
+        <p>Model is confident across its forward distribution. A signal worth investigating — look for confirmation on a second timeframe before acting.</p>
+      </div>
+      <div class="rule moderate">
+        <b>MODERATE 5–10%</b>
+        <p>Mixed signal. Useful for context, not for decisions on its own.</p>
+      </div>
+      <div class="rule wide active">
+        <b>WIDE &gt;10% · current</b>
+        <p>Model is hedging hard. A ±40% envelope on this name means the forecast carries no usable signal — treat it as noise. Do not act on it.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Disclaimer -->
+  <div class="disclaimer">
+    <p><b>This is not financial advice.</b> Kronos outputs a probability distribution over likely price paths, not a price target. BE is a high-volatility name and this is one of the widest bands in the set — the −44.95% median path sits inside a ±40% envelope, so it should be read as model uncertainty, not a call. Stocks carry real risk. Run on multiple timeframes (daily <i>and</i> weekly) and pair with the fundamental side before giving any signal weight.</p>
+  </div>
+
+  <!-- Full trajectory -->
+  <div class="panel">
+    <h2>Full forecast trajectory · 30 candles</h2>
+    <div class="tbl-scroll">
+      <table id="traj">
+        <thead><tr><th>Date</th><th>Open</th><th>High</th><th>Low</th><th>Close</th><th>Δ vs last</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Refresh commands -->
+  <details>
+    <summary>↻ Data refresh commands</summary>
+    <pre><span class="cmt"># Re-generate the Kronos forecast that drives the chart</span>
+python3 ~/.claude/skills/kronos/scripts/run_kronos.py BE 1y 1d 30
+
+<span class="cmt"># Pull recent history (yfinance) for the chart context</span>
+python3 - &lt;&lt;'PY'
+import yfinance as yf, json
+df = yf.Ticker("BE").history(period="3mo", interval="1d")
+print(json.dumps([{"date":d.strftime("%Y-%m-%d"),"close":round(float(c),2)}
+                  for d,c in zip(df.index, df["Close"])]))
+PY
+
+<span class="cmt"># Paste both arrays into this file (HISTORY + FORECAST below) and redeploy</span></pre>
+  </details>
+
+  <footer>
+    Model: <b>Kronos-small</b> (NeoQuasar/Kronos-small) — trained on 12B candlesticks from 45 exchanges.<br/>
+    Market data via <a href="https://github.com/ranaroussi/yfinance">yfinance</a> · Forecast engine <a href="https://github.com/shiyu-coder/Kronos">shiyu-coder/Kronos</a> (MIT).<br/>
+    Companion tearsheets: <a href="../kronos-nvda/">NVDA</a> · <a href="../kronos-now/">NOW</a> · Research tool only · Not financial advice · Not a trading bot · Not a price target.
+  </footer>
+
+</div>
+
+<script>
+// ── Data ───────────────────────────────────────────────────────────────────
+const LAST_CLOSE = 264.01;
+
+const HISTORY = [{"date":"2026-03-05","close":159.99},{"date":"2026-03-06","close":135.19},{"date":"2026-03-09","close":151.32},{"date":"2026-03-10","close":154.0},{"date":"2026-03-11","close":159.21},{"date":"2026-03-12","close":157.17},{"date":"2026-03-13","close":154.51},{"date":"2026-03-16","close":153.68},{"date":"2026-03-17","close":160.05},{"date":"2026-03-18","close":156.58},{"date":"2026-03-19","close":166.69},{"date":"2026-03-20","close":150.12},{"date":"2026-03-23","close":141.33},{"date":"2026-03-24","close":145.88},{"date":"2026-03-25","close":150.22},{"date":"2026-03-26","close":133.52},{"date":"2026-03-27","close":133.24},{"date":"2026-03-30","close":119.51},{"date":"2026-03-31","close":135.49},{"date":"2026-04-01","close":132.45},{"date":"2026-04-02","close":135.63},{"date":"2026-04-06","close":135.0},{"date":"2026-04-07","close":135.91},{"date":"2026-04-08","close":146.78},{"date":"2026-04-09","close":160.13},{"date":"2026-04-10","close":166.7},{"date":"2026-04-13","close":176.67},{"date":"2026-04-14","close":219.03},{"date":"2026-04-15","close":213.84},{"date":"2026-04-16","close":210.06},{"date":"2026-04-17","close":207.86},{"date":"2026-04-20","close":218.27},{"date":"2026-04-21","close":220.91},{"date":"2026-04-22","close":229.75},{"date":"2026-04-23","close":237.57},{"date":"2026-04-24","close":231.17},{"date":"2026-04-27","close":234.68},{"date":"2026-04-28","close":226.37},{"date":"2026-04-29","close":287.97},{"date":"2026-04-30","close":283.36},{"date":"2026-05-01","close":290.52},{"date":"2026-05-04","close":288.64},{"date":"2026-05-05","close":295.25},{"date":"2026-05-06","close":285.47},{"date":"2026-05-07","close":258.64},{"date":"2026-05-08","close":261.03},{"date":"2026-05-11","close":283.92},{"date":"2026-05-12","close":280.69},{"date":"2026-05-13","close":289.76},{"date":"2026-05-14","close":303.41},{"date":"2026-05-15","close":275.95},{"date":"2026-05-18","close":258.71},{"date":"2026-05-19","close":261.34},{"date":"2026-05-20","close":282.31},{"date":"2026-05-21","close":307.88},{"date":"2026-05-22","close":302.49},{"date":"2026-05-26","close":302.4},{"date":"2026-05-27","close":293.8},{"date":"2026-05-28","close":290.01},{"date":"2026-05-29","close":285.0},{"date":"2026-06-01","close":273.51},{"date":"2026-06-02","close":302.85},{"date":"2026-06-03","close":287.32},{"date":"2026-06-04","close":291.37},{"date":"2026-06-05","close":264.0}];
+
+// date, open, high, low, close  (Kronos BE 1y/1d/30)
+const FORECAST = [
+  ["2026-06-06",234.60,234.74,197.34,206.01],
+  ["2026-06-07",197.40,201.32,174.55,184.64],
+  ["2026-06-08",176.34,188.18,160.01,180.27],
+  ["2026-06-09",190.50,197.17,178.00,188.08],
+  ["2026-06-10",193.39,204.43,184.91,196.88],
+  ["2026-06-11",195.77,196.63,181.19,186.41],
+  ["2026-06-12",186.69,186.84,164.03,169.95],
+  ["2026-06-13",164.04,174.87,150.32,162.49],
+  ["2026-06-14",168.44,172.98,157.13,164.44],
+  ["2026-06-15",165.91,179.14,161.64,175.62],
+  ["2026-06-16",176.37,173.60,145.95,149.85],
+  ["2026-06-17",143.54,159.72,138.22,150.95],
+  ["2026-06-18",152.53,163.40,147.68,158.40],
+  ["2026-06-19",194.16,245.63,155.34,184.70],
+  ["2026-06-20",186.60,185.76,159.00,163.25],
+  ["2026-06-21",168.42,171.68,156.76,160.81],
+  ["2026-06-22",109.27,149.50,104.70,140.63],
+  ["2026-06-23",132.98,138.40,122.74,129.20],
+  ["2026-06-24",133.22,144.79,130.13,139.08],
+  ["2026-06-25",136.57,139.90,125.96,128.54],
+  ["2026-06-26",129.02,131.71,114.57,118.58],
+  ["2026-06-27",117.68,123.66,106.51,113.88],
+  ["2026-06-28",65.47,99.89,76.50,101.13],
+  ["2026-06-29",104.40,118.13,101.86,114.02],
+  ["2026-06-30",108.27,110.50,111.96,115.72],
+  ["2026-07-01",114.86,128.83,114.31,127.31],
+  ["2026-07-02",118.83,131.89,110.10,128.71],
+  ["2026-07-03",137.14,143.88,119.38,116.42],
+  ["2026-07-04",114.07,130.93,93.13,129.87],
+  ["2026-07-05",128.83,148.08,127.27,145.33]
+];
+
+// ── Table ──────────────────────────────────────────────────────────────────
+const tb = document.querySelector("#traj tbody");
+FORECAST.forEach(r=>{
+  const [d,o,h,l,c]=r;
+  const delta=((c-LAST_CLOSE)/LAST_CLOSE*100);
+  const cls=delta<0?"dn":"up";
+  tb.insertAdjacentHTML("beforeend",
+    `<tr><td>${d}</td><td>${o.toFixed(2)}</td><td>${h.toFixed(2)}</td><td>${l.toFixed(2)}</td>`+
+    `<td>${c.toFixed(2)}</td><td class="${cls}">${delta>=0?"+":""}${delta.toFixed(2)}%</td></tr>`);
+});
+
+// ── Chart ──────────────────────────────────────────────────────────────────
+const labels = [...HISTORY.map(p=>p.date), ...FORECAST.map(r=>r[0])];
+const nH = HISTORY.length;
+const pad = n => new Array(n).fill(null);
+
+const histClose = [...HISTORY.map(p=>p.close), ...pad(FORECAST.length)];
+const fcMedian  = [...pad(nH-1), HISTORY[nH-1].close, ...FORECAST.map(r=>r[4])];
+const fcHigh    = [...pad(nH-1), HISTORY[nH-1].close, ...FORECAST.map(r=>r[2])];
+const fcLow     = [...pad(nH-1), HISTORY[nH-1].close, ...FORECAST.map(r=>r[3])];
+
+const ctx = document.getElementById("chart");
+new Chart(ctx,{
+  type:"line",
+  data:{labels,datasets:[
+    {label:"Forecast high",data:fcHigh,borderColor:"rgba(240,97,109,0)",
+      backgroundColor:"rgba(240,97,109,0.13)",fill:"+1",pointRadius:0,tension:.25,borderWidth:0},
+    {label:"Forecast low",data:fcLow,borderColor:"rgba(240,97,109,0)",
+      pointRadius:0,tension:.25,borderWidth:0,fill:false},
+    {label:"Historical close",data:histClose,borderColor:"#e6edf3",borderWidth:2,
+      pointRadius:0,tension:.2},
+    {label:"Forecast median",data:fcMedian,borderColor:"#f0616d",borderWidth:2,
+      borderDash:[5,4],pointRadius:0,tension:.25}
+  ]},
+  options:{
+    responsive:true,maintainAspectRatio:false,
+    interaction:{mode:"index",intersect:false},
+    plugins:{
+      legend:{display:false},
+      tooltip:{backgroundColor:"#0d131c",borderColor:"#1e2733",borderWidth:1,
+        titleColor:"#8b97a7",bodyColor:"#e6edf3",padding:10,
+        callbacks:{label:c=>c.parsed.y==null?null:`${c.dataset.label}: $${c.parsed.y.toFixed(2)}`}}
+    },
+    scales:{
+      x:{grid:{color:"rgba(30,39,51,0.6)"},ticks:{color:"#5b6675",maxRotation:0,
+        autoSkip:true,maxTicksLimit:9,font:{family:"monospace",size:10}}},
+      y:{grid:{color:"rgba(30,39,51,0.6)"},ticks:{color:"#5b6675",
+        font:{family:"monospace",size:10},callback:v=>"$"+v}}
+    }
+  }
+});
+</script>
+</body>
+</html>
