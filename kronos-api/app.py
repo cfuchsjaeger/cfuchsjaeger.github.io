@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import os
 import sys
+import time
+import random
 from functools import lru_cache
 from pathlib import Path
 
@@ -39,14 +41,11 @@ from model import Kronos, KronosTokenizer, KronosPredictor  # noqa: E402
 TOKENIZER_ID = "NeoQuasar/Kronos-Tokenizer-base"
 MODEL_ID = "NeoQuasar/Kronos-small"
 
-# Allowed yfinance values — guard the inputs.
 PERIODS = {"1mo", "3mo", "6mo", "1y", "2y", "5y", "max"}
 INTERVALS = {"1d", "1h", "4h", "1wk", "1mo"}
 
 app = FastAPI(title="Kronos Forecast API", version="1.0")
 
-# CORS: allow the static site (and local dev) to call this API from the browser.
-# Tighten allow_origins to your Pages origin in production if you prefer.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -57,10 +56,37 @@ app.add_middleware(
 
 @lru_cache(maxsize=1)
 def get_predictor() -> KronosPredictor:
-    """Load tokenizer + model once and reuse across requests."""
     tokenizer = KronosTokenizer.from_pretrained(TOKENIZER_ID)
     model = Kronos.from_pretrained(MODEL_ID)
     return KronosPredictor(model, tokenizer, device="cpu", max_context=512)
+
+
+def fetch_with_retry(ticker: str, period: str, interval: str, max_attempts: int = 5) -> pd.DataFrame:
+    """Fetch OHLCV from yfinance, retrying on rate-limit errors with exponential backoff.
+
+    HuggingFace Spaces share IPs that Yahoo Finance aggressively rate-limits (429).
+    Retrying with jitter resolves most transient failures within 1-2 attempts.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            data = yf.Ticker(ticker).history(period=period, interval=interval, auto_adjust=False)
+            return data
+        except Exception as e:
+            msg = str(e).lower()
+            if "rate limit" in msg or "429" in msg or "too many" in msg:
+                if attempt == max_attempts - 1:
+                    last_exc = e
+                    break
+                wait = (2 ** attempt) + random.uniform(0, 1)
+                time.sleep(wait)
+                last_exc = e
+            else:
+                raise  # non-rate-limit errors bubble up immediately
+    raise HTTPException(
+        429,
+        f"Yahoo Finance is rate-limiting this server. Wait a minute and retry. (last error: {last_exc})",
+    )
 
 
 def build_future_timestamps(last_ts: pd.Timestamp, interval: str, pred_len: int) -> pd.DatetimeIndex:
@@ -102,7 +128,7 @@ def predict(
     if interval not in INTERVALS:
         raise HTTPException(400, f"interval must be one of {sorted(INTERVALS)}")
 
-    data = yf.Ticker(ticker).history(period=period, interval=interval, auto_adjust=False)
+    data = fetch_with_retry(ticker, period, interval)
     if data.empty:
         raise HTTPException(
             404,
