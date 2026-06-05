@@ -102,6 +102,69 @@
 
   footer{border-top:1px solid var(--line);padding-top:16px;margin-top:8px;color:var(--faint);
     font-size:11.5px;font-family:var(--mono);line-height:1.7}
+
+  /* === HERO PANEL (tearsheet) === */
+  .hero-panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:22px 22px 18px;margin-bottom:16px}
+  .hero-top{display:flex;align-items:flex-start;gap:18px;flex-wrap:wrap}
+  .hero-stamp{font-family:var(--mono);font-size:36px;font-weight:800;letter-spacing:.06em;
+    padding:10px 22px;border-radius:10px;border:2px solid;line-height:1;flex-shrink:0;
+    text-transform:uppercase}
+  .hero-stamp.buy {color:#27c08a;border-color:#27c08a;box-shadow:0 0 18px rgba(39,192,138,.22)}
+  .hero-stamp.hold{color:#c9a227;border-color:#c9a227;box-shadow:0 0 18px rgba(201,162,39,.18)}
+  .hero-stamp.sell{color:#f0616d;border-color:#f0616d;box-shadow:0 0 18px rgba(240,97,109,.22)}
+  .hero-meta{flex:1;min-width:180px}
+  .hero-name{font-size:20px;font-weight:700;margin:0 0 4px}
+  .hero-ticker{font-family:var(--mono);font-size:12px;color:var(--muted);letter-spacing:.08em}
+  .hero-prices{display:flex;gap:24px;margin-top:14px;flex-wrap:wrap}
+  .hero-price-item .k{font-family:var(--mono);font-size:10px;letter-spacing:.08em;
+    text-transform:uppercase;color:var(--muted);margin-bottom:5px}
+  .hero-price-item .v{font-family:var(--mono);font-size:22px;font-weight:700}
+  .hero-price-item .sub{font-size:11px;color:var(--faint);margin-top:2px;font-family:var(--mono)}
+  .hero-score{margin-left:auto;text-align:center;flex-shrink:0}
+  .hero-score .score-ring{width:60px;height:60px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    font-family:var(--mono);font-size:18px;font-weight:700;border:2px solid}
+  .score-ring.buy {color:#27c08a;border-color:#27c08a}
+  .score-ring.hold{color:#c9a227;border-color:#c9a227}
+  .score-ring.sell{color:#f0616d;border-color:#f0616d}
+  .hero-score .score-label{font-family:var(--mono);font-size:9px;letter-spacing:.08em;
+    text-transform:uppercase;color:var(--faint);margin-top:4px;text-align:center}
+
+  /* indicator pills */
+  .pills-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:18px}
+  @media(max-width:680px){.pills-grid{grid-template-columns:repeat(2,1fr)}}
+  .pill{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;
+    padding:11px 13px;display:flex;flex-direction:column;gap:3px}
+  .pill.bull{border-left:3px solid var(--up)}
+  .pill.bear{border-left:3px solid var(--down)}
+  .pill.neutral{border-left:3px solid var(--flat)}
+  .pill-name{font-family:var(--mono);font-size:9.5px;letter-spacing:.07em;
+    text-transform:uppercase;color:var(--faint)}
+  .pill-val{font-family:var(--mono);font-size:13px;font-weight:700}
+  .pill-val.bull{color:var(--up)} .pill-val.bear{color:var(--down)} .pill-val.neutral{color:var(--flat)}
+  .pill-sub{font-family:var(--mono);font-size:10.5px;color:var(--faint)}
+  .analyst-row{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;padding-top:14px;
+    border-top:1px solid var(--line)}
+  .analyst-item .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.07em;
+    text-transform:uppercase;color:var(--faint)}
+  .analyst-item .v{font-family:var(--mono);font-size:14px;font-weight:600;margin-top:3px}
+
+  /* narrative */
+  .narrative-panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:18px;margin-bottom:16px}
+  .narrative-hl{font-size:17px;font-weight:700;margin:0 0 6px;letter-spacing:-.01em}
+  .narrative-sub{color:var(--muted);font-size:13px;margin:0 0 16px}
+  .narrative-cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:580px){.narrative-cols{grid-template-columns:1fr}}
+  .narrative-col h3{font-family:var(--mono);font-size:10px;letter-spacing:.08em;
+    text-transform:uppercase;color:var(--faint);margin:0 0 9px}
+  .narrative-col ul{margin:0;padding-left:18px}
+  .narrative-col li{font-size:13px;color:var(--muted);margin-bottom:5px;line-height:1.5}
+  .narrative-col.bull-col h3{color:var(--up)}
+  .narrative-col.bear-col h3{color:var(--down)}
+  .narrative-action{background:var(--panel-2);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:8px;padding:11px 14px;margin-top:14px;font-size:13px;color:var(--ink);line-height:1.6}
 </style>
 </head>
 <body>
@@ -250,9 +313,9 @@ const LS = {
 };
 const getJSON=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}};
 const setJSON=(k,v)=>localStorage.setItem(k,JSON.stringify(v));
-const apiBase=()=>(localStorage.getItem(LS.api)||"").replace(/\/$/,"");
+const apiBase=()=>(localStorage.getItem(LS.api)||".").replace(/\/$/,"");
 
-//=== forecast loading (API → cached json) ====================================
+//=== forecast loading ========================================================
 const cache=new Map();
 async function loadForecast(ticker,opts={}){
   ticker=ticker.toUpperCase().trim();
@@ -260,8 +323,8 @@ async function loadForecast(ticker,opts={}){
   const key=`${ticker}|${period}|${interval}|${pred_len}`;
   if(!force && cache.has(key)) return cache.get(key);
 
-  const base=apiBase();
-  if(base){
+  const base=(localStorage.getItem(LS.api)||".").replace(/\/$/,"");
+  if(base && base !== "."){
     const u=`${base}/predict?ticker=${encodeURIComponent(ticker)}&period=${period}&interval=${interval}&pred_len=${pred_len}`;
     const r=await fetch(u);
     if(!r.ok){
@@ -272,18 +335,20 @@ async function loadForecast(ticker,opts={}){
     const data=await r.json(); data._source="API";
     cache.set(key,data); return data;
   }
-  // fallback to bundled snapshot
   const r=await fetch(`data/${ticker}.json`);
   if(!r.ok) throw new Error(`No cached data for ${ticker}. Set the API (⚙) to analyze new tickers.`);
   const data=await r.json(); data._source="cached";
   cache.set(key,data); return data;
 }
 
-//=== signal logic (mechanical) ===============================================
+//=== signal logic ============================================================
 function signalFor(d){
+  if(d.indicators) {
+    const c=d.indicators.call;
+    return c==="BUY" ? {txt:"BUY",cls:"up"} : c==="SELL" ? {txt:"SELL",cls:"down"} : {txt:"HOLD",cls:"flat"};
+  }
   if(d.band==="WIDE") return {txt:"No signal — noise",cls:"flat"};
   if(d.band==="MODERATE") return {txt:"Mixed — context only",cls:"flat"};
-  // NARROW
   if(d.direction==="UP")   return {txt:"Investigate (bullish)",cls:"up"};
   if(d.direction==="DOWN") return {txt:"Caution (bearish)",cls:"down"};
   return {txt:"Flat",cls:"muted"};
@@ -292,37 +357,148 @@ const fmt=(n,dp=2)=>n==null?"—":Number(n).toLocaleString(undefined,{minimumFra
 const pct=(n)=>n==null?"—":`${n>=0?"+":""}${fmt(n)}%`;
 const dirCls=(p)=>p>0.25?"up":(p<-0.25?"down":"flat");
 
+//=== HERO / indicator pill rendering =========================================
+const CALL_CLS={BUY:"buy",HOLD:"hold",SELL:"sell"};
+
+function renderHero(container, d) {
+  const ind = d.indicators;
+  const call = ind ? ind.call : signalFor(d).txt.split(" ")[0];
+  const score = ind ? ind.score : null;
+  const callCls = CALL_CLS[call] || "hold";
+  const company = d.company || d.ticker;
+  const exchStr = d.exchange ? ` · ${d.exchange}` : "";
+  const analyst = d.analyst || {};
+
+  let pillsHtml = "";
+  if (ind && ind.pills) {
+    pillsHtml = `<div class="pills-grid">${ind.pills.map(p=>`
+      <div class="pill ${p.side}">
+        <div class="pill-name">${p.name}</div>
+        <div class="pill-val ${p.side}">${p.value}</div>
+        <div class="pill-sub">${p.sub}</div>
+      </div>`).join("")}</div>`;
+  }
+
+  let analystHtml = "";
+  if (analyst.consensus || analyst.target) {
+    const upsideCls = (analyst.upside||0) >= 0 ? "up" : "down";
+    analystHtml = `<div class="analyst-row">
+      <div class="analyst-item"><div class="k">Analyst consensus</div>
+        <div class="v">${analyst.consensus||"N/A"}</div></div>
+      ${analyst.target ? `<div class="analyst-item"><div class="k">Price target</div>
+        <div class="v">$${fmt(analyst.target)}</div></div>` : ""}
+      ${analyst.upside != null ? `<div class="analyst-item"><div class="k">Upside to target</div>
+        <div class="v ${upsideCls}">${pct(analyst.upside)}</div></div>` : ""}
+      ${analyst.num_analysts ? `<div class="analyst-item"><div class="k">Analysts</div>
+        <div class="v">${analyst.num_analysts}</div></div>` : ""}
+    </div>`;
+  }
+
+  const scoreHtml = score != null ? `
+    <div class="hero-score">
+      <div class="score-ring ${callCls}">${score > 0 ? "+" : ""}${score}</div>
+      <div class="score-label">signal score</div>
+    </div>` : "";
+
+  container.insertAdjacentHTML("beforeend", `
+    <div class="hero-panel">
+      <div class="hero-top">
+        <div class="hero-stamp ${callCls}">${call}</div>
+        <div class="hero-meta">
+          <div class="hero-name">${company}</div>
+          <div class="hero-ticker">${d.ticker}${exchStr} · as of ${d.last_date} · ${d._source}</div>
+          <div class="hero-prices">
+            <div class="hero-price-item">
+              <div class="k">Last close</div>
+              <div class="v">$${fmt(d.last_close)}</div>
+              <div class="sub">${d.last_date}</div>
+            </div>
+            <div class="hero-price-item">
+              <div class="k">Kronos +${d.pred_len}d</div>
+              <div class="v ${dirCls(d.pct_change)}">$${fmt(d.predicted_close)}</div>
+              <div class="sub ${dirCls(d.pct_change)}">${pct(d.pct_change)}</div>
+            </div>
+            <div class="hero-price-item">
+              <div class="k">Range</div>
+              <div class="v" style="font-size:14px">$${fmt(d.range_low)}–$${fmt(d.range_high)}</div>
+              <div class="sub"><span class="badge ${d.band}">${d.band}</span> ±${fmt(d.band_pct)}%</div>
+            </div>
+          </div>
+        </div>
+        ${scoreHtml}
+      </div>
+      ${pillsHtml}
+      ${analystHtml}
+    </div>`);
+}
+
+function renderNarrative(container, d) {
+  if (!d.narrative) return;
+  const n = d.narrative;
+  container.insertAdjacentHTML("beforeend", `
+    <div class="narrative-panel">
+      <div class="narrative-hl">${n.headline || ""}</div>
+      <div class="narrative-sub">${n.subhead || ""}</div>
+      <div class="narrative-cols">
+        <div class="narrative-col bear-col">
+          <h3>Bear case</h3>
+          <ul>${(n.bear_bullets||[]).map(b=>`<li>${b}</li>`).join("")}</ul>
+        </div>
+        <div class="narrative-col bull-col">
+          <h3>Bull case</h3>
+          <ul>${(n.bull_bullets||[]).map(b=>`<li>${b}</li>`).join("")}</ul>
+        </div>
+      </div>
+      ${n.action ? `<div class="narrative-action">${n.action}</div>` : ""}
+    </div>`);
+}
+
 //=== render a full forecast (analyze tab) ====================================
 let chartRef=null;
 function renderForecast(container,d){
-  const cls=dirCls(d.pct_change);
-  container.innerHTML=`
-    <div class="grid4">
-      <div class="card"><div class="k">${d.ticker} · last close</div>
-        <div class="v">$${fmt(d.last_close)}</div><div class="sub">${d.last_date} · ${d._source}</div></div>
-      <div class="card"><div class="k">Predicted · +${d.pred_len}${d.interval}</div>
-        <div class="v ${cls}">$${fmt(d.predicted_close)}</div><div class="sub">horizon close</div></div>
-      <div class="card"><div class="k">Direction</div>
-        <div class="v ${cls}">${d.direction} ${pct(d.pct_change)}</div><div class="sub">median path</div></div>
-      <div class="card"><div class="k">Confidence band</div>
-        <div class="v"><span class="badge ${d.band}">${d.band}</span></div>
-        <div class="sub">$${fmt(d.range_low)}–$${fmt(d.range_high)} · ±${fmt(d.band_pct)}%</div></div>
-    </div>
-    <div class="panel"><h2>Price · history → ${d.pred_len}-candle forecast</h2>
-      <div class="chart-box"><canvas id="fc-chart"></canvas></div></div>
-    <div class="panel"><h2>Forecast trajectory</h2>
-      <div class="tbl-scroll"><table id="fc-tbl">
-        <thead><tr><th>Date</th><th>Open</th><th>High</th><th>Low</th><th>Close</th><th>Δ vs last</th></tr></thead>
-        <tbody></tbody></table></div></div>`;
+  container.innerHTML = "";
 
-  const tb=container.querySelector("#fc-tbl tbody");
+  // Hero panel + pills (always shown when data has indicators, or basic version)
+  renderHero(container, d);
+
+  // Claude narrative (only when API returned it)
+  if (d.narrative) renderNarrative(container, d);
+
+  // Classic 4-card fallback for cached data without indicators
+  if (!d.indicators) {
+    container.insertAdjacentHTML("beforeend", `
+      <div class="grid4">
+        <div class="card"><div class="k">${d.ticker} · last close</div>
+          <div class="v">$${fmt(d.last_close)}</div><div class="sub">${d.last_date} · ${d._source}</div></div>
+        <div class="card"><div class="k">Predicted · +${d.pred_len}${d.interval}</div>
+          <div class="v ${dirCls(d.pct_change)}">$${fmt(d.predicted_close)}</div><div class="sub">horizon close</div></div>
+        <div class="card"><div class="k">Direction</div>
+          <div class="v ${dirCls(d.pct_change)}">${d.direction} ${pct(d.pct_change)}</div><div class="sub">median path</div></div>
+        <div class="card"><div class="k">Confidence band</div>
+          <div class="v"><span class="badge ${d.band}">${d.band}</span></div>
+          <div class="sub">$${fmt(d.range_low)}–$${fmt(d.range_high)} · ±${fmt(d.band_pct)}%</div></div>
+      </div>`);
+  }
+
+  // Chart
+  container.insertAdjacentHTML("beforeend",
+    `<div class="panel"><h2>Price · history → ${d.pred_len}-candle forecast</h2>
+      <div class="chart-box"><canvas id="fc-chart"></canvas></div></div>`);
+
+  // Trajectory table
+  let tbRows = "";
   d.forecast.forEach(r=>{
     const dd=((r.close-d.last_close)/d.last_close*100);
-    tb.insertAdjacentHTML("beforeend",
-      `<tr><td>${r.date}</td><td>${fmt(r.open)}</td><td>${fmt(r.high)}</td><td>${fmt(r.low)}</td>`+
-      `<td>${fmt(r.close)}</td><td class="${dd<0?'down':'up'}">${pct(dd)}</td></tr>`);
+    tbRows += `<tr><td>${r.date}</td><td>${fmt(r.open)}</td><td>${fmt(r.high)}</td><td>${fmt(r.low)}</td>`+
+      `<td>${fmt(r.close)}</td><td class="${dd<0?'down':'up'}">${pct(dd)}</td></tr>`;
   });
+  container.insertAdjacentHTML("beforeend",
+    `<div class="panel"><h2>Forecast trajectory</h2>
+      <div class="tbl-scroll"><table>
+        <thead><tr><th>Date</th><th>Open</th><th>High</th><th>Low</th><th>Close</th><th>Δ vs last</th></tr></thead>
+        <tbody>${tbRows}</tbody></table></div></div>`);
 
+  // Draw chart
   const H=d.history, F=d.forecast, nH=H.length, pad=n=>new Array(n).fill(null);
   const labels=[...H.map(p=>p.date),...F.map(r=>r.date)];
   const hist=[...H.map(p=>p.close),...pad(F.length)];
@@ -462,7 +638,6 @@ async function renderReco(force=false){
   for(const t of set){
     try{const d=await loadForecast(t,{force}); items.push(d);}catch(e){items.push({ticker:t,_err:e.message});}
   }
-  // rank: NARROW first, then by |pct_change|; errors last
   const rank=d=>d._err?-1:({NARROW:3,MODERATE:2,WIDE:1}[d.band]||0);
   items.sort((a,b)=> rank(b)-rank(a) || Math.abs((b.pct_change||0))-Math.abs((a.pct_change||0)));
   for(const d of items){
@@ -496,11 +671,11 @@ function gotoAnalyze(ticker){
 //=== settings / API pill ====================================================
 const modal=document.getElementById("modal");
 function refreshApiPill(){
-  const b=apiBase();
+  const b=(localStorage.getItem(LS.api)||"").replace(/\/$/,"");
   document.getElementById("apiLabel").textContent=b? b.replace(/^https?:\/\//,"") : "No API — using cached data";
   document.getElementById("apiDot").classList.toggle("live",!!b);
 }
-document.getElementById("apiPill").onclick=()=>{document.getElementById("apiInput").value=apiBase();apiMsg.textContent="";modal.classList.add("open")};
+document.getElementById("apiPill").onclick=()=>{document.getElementById("apiInput").value=(localStorage.getItem(LS.api)||"");apiMsg.textContent="";modal.classList.add("open")};
 modal.addEventListener("click",e=>{if(e.target===modal)modal.classList.remove("open")});
 document.getElementById("apiSave").onclick=()=>{
   const v=document.getElementById("apiInput").value.trim().replace(/\/$/,"");
@@ -520,7 +695,6 @@ document.getElementById("apiTest").onclick=async()=>{
 
 //=== boot ====================================================================
 refreshApiPill();
-// preload a sample on first paint
 gotoAnalyze("NVDA");
 </script>
 </body>
