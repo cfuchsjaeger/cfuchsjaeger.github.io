@@ -9,6 +9,7 @@ Set ANTHROPIC_API_KEY env var to enable narrative generation.
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import time
@@ -21,6 +22,9 @@ import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("kronos")
 
 KRONOS_REPO = Path(os.environ.get("KRONOS_REPO", Path(__file__).resolve().parent / "_kronos"))
 sys.path.insert(0, str(KRONOS_REPO))
@@ -63,15 +67,16 @@ def fetch_with_retry(ticker: str, period: str, interval: str, max_attempts: int 
 
 
 def fetch_info(ticker: str) -> dict:
-    """Fetch yfinance .info dict, returning {} on any error."""
     try:
-        return yf.Ticker(ticker).info or {}
-    except Exception:
+        info = yf.Ticker(ticker).info or {}
+        log.info("[%s] fetch_info keys: %s", ticker, list(info.keys())[:15])
+        return info
+    except Exception as e:
+        log.warning("[%s] fetch_info failed: %s", ticker, e)
         return {}
 
 
 def calc_rsi(closes: pd.Series, period: int = 14) -> float:
-    """Wilder's RSI."""
     delta = closes.diff().dropna()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -83,7 +88,6 @@ def calc_rsi(closes: pd.Series, period: int = 14) -> float:
 
 
 def calc_macd(closes: pd.Series) -> dict:
-    """MACD 12/26/9. Returns signal side and histogram."""
     ema12 = closes.ewm(span=12, adjust=False).mean()
     ema26 = closes.ewm(span=26, adjust=False).mean()
     macd_line = ema12 - ema26
@@ -94,16 +98,10 @@ def calc_macd(closes: pd.Series) -> dict:
 
 
 def build_indicators(hist: pd.DataFrame, info: dict, kronos_pct: float, kronos_band: str) -> dict:
-    """
-    Returns {'pills': [...], 'call': 'BUY'|'HOLD'|'SELL', 'score': float}.
-    Each pill: {name, value, sub, side}   side: 'bull'|'bear'|'neutral'
-    Scoring: bull = +1, bear = -1, neutral = 0. ≥2.5 → BUY, ≤-2.5 → SELL.
-    """
     closes = hist["close"]
     score = 0.0
     pills = []
 
-    # 1. Long-term trend (50d / 200d MA)
     ma50  = closes.rolling(50).mean().iloc[-1]  if len(closes) >= 50  else None
     ma200 = closes.rolling(200).mean().iloc[-1] if len(closes) >= 200 else None
     last  = closes.iloc[-1]
@@ -124,7 +122,6 @@ def build_indicators(hist: pd.DataFrame, info: dict, kronos_pct: float, kronos_b
     else:
         pills.append({"name": "Long-term Trend", "value": "N/A", "sub": "Not enough data", "side": "neutral"})
 
-    # 2. Momentum (MACD 12/26/9)
     if len(closes) >= 35:
         m = calc_macd(closes)
         side = "bull" if m["bull"] else "bear"
@@ -134,7 +131,6 @@ def build_indicators(hist: pd.DataFrame, info: dict, kronos_pct: float, kronos_b
     else:
         pills.append({"name": "MACD", "value": "N/A", "sub": "Not enough data", "side": "neutral"})
 
-    # 3. RSI (14-day)
     if len(closes) >= 16:
         rsi = calc_rsi(closes)
         if rsi >= 70:
@@ -148,7 +144,6 @@ def build_indicators(hist: pd.DataFrame, info: dict, kronos_pct: float, kronos_b
     else:
         pills.append({"name": "RSI (14)", "value": "N/A", "sub": "Not enough data", "side": "neutral"})
 
-    # 4. Valuation (P/E vs sector)
     pe = info.get("trailingPE") or info.get("forwardPE")
     pe_type = "trailing" if info.get("trailingPE") else "forward"
     if pe and pe > 0:
@@ -164,7 +159,6 @@ def build_indicators(hist: pd.DataFrame, info: dict, kronos_pct: float, kronos_b
     else:
         pills.append({"name": "Valuation", "value": "N/A", "sub": "P/E unavailable", "side": "neutral"})
 
-    # 5. Fundamentals (revenue growth)
     rev_growth = info.get("revenueGrowth")
     if rev_growth is not None:
         if rev_growth >= 0.15:
@@ -179,7 +173,6 @@ def build_indicators(hist: pd.DataFrame, info: dict, kronos_pct: float, kronos_b
     else:
         pills.append({"name": "Fundamentals", "value": "N/A", "sub": "Revenue data N/A", "side": "neutral"})
 
-    # 6. Kronos model signal
     if kronos_band == "NARROW":
         side = "bull" if kronos_pct > 0.25 else ("bear" if kronos_pct < -0.25 else "neutral")
         score += 1 if side == "bull" else (-1 if side == "bear" else 0)
@@ -187,43 +180,39 @@ def build_indicators(hist: pd.DataFrame, info: dict, kronos_pct: float, kronos_b
     elif kronos_band == "MODERATE":
         side = "neutral"
         label = "Uncertain"
-    else:  # WIDE
+    else:
         side = "bear" if kronos_pct < -5 else "neutral"
         score += -1 if side == "bear" else 0
         label = "High uncertainty"
     pills.append({"name": "Kronos 30d", "value": label,
                   "sub": f"{kronos_pct:+.1f}%  band {kronos_band}", "side": side})
 
-    if score >= 2.5:
-        call = "BUY"
-    elif score <= -2.5:
-        call = "SELL"
-    else:
-        call = "HOLD"
-
+    call = "BUY" if score >= 2.5 else ("SELL" if score <= -2.5 else "HOLD")
     return {"pills": pills, "call": call, "score": round(score, 1)}
 
 
 def fetch_analyst(info: dict, last_close: float) -> dict:
-    """Pull analyst consensus and price target from yfinance info."""
-    rec = info.get("recommendationKey", "")  # e.g. 'buy', 'strong_buy'
+    rec = info.get("recommendationKey", "")
     target = info.get("targetMeanPrice")
     upside = round((target - last_close) / last_close * 100, 1) if target and last_close else None
     num_analysts = info.get("numberOfAnalystOpinions")
-    return {
+    result = {
         "consensus": rec.replace("_", " ").title() if rec else "N/A",
         "target": round(float(target), 2) if target else None,
         "upside": upside,
         "num_analysts": num_analysts,
     }
+    log.info("[analyst] recommendationKey=%r targetMeanPrice=%r result=%s", rec, target, result)
+    return result
 
 
 def generate_narrative(ticker: str, company: str, indicators: dict, analyst: dict,
                        last_close: float, pred_close: float, pct: float) -> dict | None:
-    """Call Claude Haiku to produce a short research narrative. Returns None if no API key."""
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
+        log.warning("[narrative] ANTHROPIC_API_KEY not set — skipping narrative")
         return None
+    log.info("[narrative] calling Claude for %s (key present, len=%d)", ticker, len(api_key))
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
@@ -252,8 +241,10 @@ def generate_narrative(ticker: str, company: str, indicators: dict, analyst: dic
             messages=[{"role": "user", "content": prompt}],
         )
         text = msg.content[0].text.strip()
+        log.info("[narrative] Claude response: %s", text[:120])
         return json.loads(text)
-    except Exception:
+    except Exception as e:
+        log.error("[narrative] failed: %s", e, exc_info=True)
         return None
 
 
@@ -340,7 +331,6 @@ def predict(
         for d, (_, r) in zip(fdates, forecast.iterrows())
     ]
 
-    # --- enrichment (non-fatal) ---
     info = fetch_info(ticker)
     company = info.get("shortName") or info.get("longName") or ticker
     exchange_map = {"NMS": "NASDAQ", "NYQ": "NYSE", "NGM": "NASDAQ", "PCX": "NYSE Arca",
