@@ -364,7 +364,7 @@ function renderHero(container,d){
 function renderNarrative(container,d){
   if(!d.narrative) return;
   const n=d.narrative;
-  container.insertAdjacentHTML("beforeend",`<div class="narrative-panel"><div class="narrative-hl">${n.headline||""}</div><div class="narrative-sub">${n.subhead||""}</div><div class="narrative-cols"><div class="narrative-col bear-col"><h3>Bear case</h3><ul>${(n.bear_bullets||[]).map(b=>`<li>${b}</li>`).join("")}</ul></div><div class="narrative-col bull-col"><h3>Bull case</h3><ul>${(n.bull_bullets||[]).map(b=>`<li>${b}</li>`).join("")}</ul></div></div>${n.action?`<div class="narrative-action">${n.action}</div>":""}</div>`);
+  container.insertAdjacentHTML("beforeend",`<div class="narrative-panel"><div class="narrative-hl">${n.headline||""}</div><div class="narrative-sub">${n.subhead||""}</div><div class="narrative-cols"><div class="narrative-col bear-col"><h3>Bear case</h3><ul>${(n.bear_bullets||[]).map(b=>`<li>${b}</li>`).join("")}</ul></div><div class="narrative-col bull-col"><h3>Bull case</h3><ul>${(n.bull_bullets||[]).map(b=>`<li>${b}</li>`).join("")}</ul></div></div>${n.action?`<div class="narrative-action">${n.action}</div>`:""}</div>`);
 }
 
 //=== forecast ================================================================
