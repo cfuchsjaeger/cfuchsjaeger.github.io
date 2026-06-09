@@ -13,6 +13,7 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
+import httpx
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
@@ -31,12 +32,11 @@ TOKENIZER_ID = "NeoQuasar/Kronos-Tokenizer-base"
 MODEL_ID     = "NeoQuasar/Kronos-small"
 PERIODS      = {"1mo", "3mo", "6mo", "1y", "2y", "5y", "max"}
 INTERVALS    = {"1d", "1h", "4h", "1wk", "1mo"}
-INFO_CACHE_TTL = 86400  # 24 hours
+INFO_CACHE_TTL = 86400
 
 app = FastAPI(title="Kronos Forecast API", version="2.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"], allow_headers=["*"])
 
-# {ticker: {"data": {...}, "ts": float}}
 _info_cache: dict[str, dict] = {}
 
 
@@ -66,13 +66,10 @@ def fetch_with_retry(ticker: str, period: str, interval: str, max_attempts: int 
 
 
 def fetch_info(ticker: str) -> dict:
-    """Fetch yfinance .info with retry and 24h in-memory cache."""
-    # return cached if still fresh
     cached = _info_cache.get(ticker)
     if cached and (time.time() - cached["ts"]) < INFO_CACHE_TTL:
         log.info("[%s] fetch_info from cache", ticker)
         return cached["data"]
-
     last_exc = None
     for attempt in range(4):
         try:
@@ -91,14 +88,10 @@ def fetch_info(ticker: str) -> dict:
             else:
                 log.warning("[%s] fetch_info error: %s", ticker, e)
                 break
-
-    # fall back to stale cache if available
     if cached:
-        log.warning("[%s] fetch_info using stale cache (age %.0fh)", ticker,
-                    (time.time() - cached["ts"]) / 3600)
+        log.warning("[%s] fetch_info using stale cache", ticker)
         return cached["data"]
-
-    log.warning("[%s] fetch_info failed, returning empty: %s", ticker, last_exc)
+    log.warning("[%s] fetch_info failed: %s", ticker, last_exc)
     return {}
 
 
@@ -275,6 +268,26 @@ def band_label(pct: float) -> str:
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "model": MODEL_ID}
+
+
+@app.get("/search")
+def search(q: str = Query(..., min_length=1, max_length=100)) -> dict:
+    """Proxy Yahoo Finance symbol search to avoid browser CORS issues."""
+    try:
+        url = f"https://query1.finance.yahoo.com/v1/finance/search?q={q}&quotesCount=7&newsCount=0&listsCount=0"
+        r = httpx.get(url, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
+        data = r.json()
+        quotes = [
+            {"symbol": x["symbol"], "name": x.get("shortname") or x.get("longname", ""),
+             "exchange": x.get("exchDisp") or x.get("exchange", ""),
+             "type": x.get("quoteType", "")}
+            for x in data.get("quotes", [])
+            if x.get("symbol") and x.get("quoteType") in ("EQUITY", "ETF", "CRYPTOCURRENCY")
+        ]
+        return {"quotes": quotes}
+    except Exception as e:
+        log.warning("[search] failed: %s", e)
+        return {"quotes": []}
 
 
 @app.get("/predict")
