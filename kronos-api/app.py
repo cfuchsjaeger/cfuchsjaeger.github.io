@@ -3,6 +3,7 @@
 
   GET /health
   GET /predict?ticker=&period=&interval=&pred_len=&history_points=
+  GET /search?q=<company or ticker>
 
 Set ANTHROPIC_API_KEY env var to enable narrative generation.
 """
@@ -10,6 +11,7 @@ Set ANTHROPIC_API_KEY env var to enable narrative generation.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 import random
@@ -17,6 +19,7 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
+import httpx
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
@@ -32,6 +35,10 @@ TOKENIZER_ID = "NeoQuasar/Kronos-Tokenizer-base"
 MODEL_ID     = "NeoQuasar/Kronos-small"
 PERIODS      = {"1mo", "3mo", "6mo", "1y", "2y", "5y", "max"}
 INTERVALS    = {"1d", "1h", "4h", "1wk", "1mo"}
+SAMPLE_COUNT = 20   # independent paths for real uncertainty estimation
+INFO_CACHE_TTL = 86400  # 24h in seconds
+
+_info_cache: dict[str, dict] = {}
 
 app = FastAPI(title="Kronos Forecast API", version="2.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"], allow_headers=["*"])
@@ -63,11 +70,32 @@ def fetch_with_retry(ticker: str, period: str, interval: str, max_attempts: int 
 
 
 def fetch_info(ticker: str) -> dict:
-    """Fetch yfinance .info dict, returning {} on any error."""
-    try:
-        return yf.Ticker(ticker).info or {}
-    except Exception:
-        return {}
+    """Fetch yfinance .info with 24h in-memory cache, retry on rate limit, stale fallback."""
+    cached = _info_cache.get(ticker)
+    if cached and (time.time() - cached["ts"]) < INFO_CACHE_TTL:
+        return cached["data"]
+    for attempt in range(4):
+        try:
+            data = yf.Ticker(ticker).info or {}
+            _info_cache[ticker] = {"data": data, "ts": time.time()}
+            return data
+        except Exception as e:
+            msg = str(e).lower()
+            if "rate limit" in msg or "429" in msg or "too many" in msg:
+                if attempt < 3:
+                    time.sleep((2 ** attempt) + random.uniform(0, 1))
+                continue
+            break
+    if cached:
+        return cached["data"]
+    return {}
+
+
+def _strip_fences(text: str) -> str:
+    """Remove ```json...``` markdown fences before json.loads()."""
+    text = re.sub(r"^```(?:json)?\s*", "", text.strip())
+    text = re.sub(r"\s*```$", "", text)
+    return text.strip()
 
 
 def calc_rsi(closes: pd.Series, period: int = 14) -> float:
@@ -251,7 +279,7 @@ def generate_narrative(ticker: str, company: str, indicators: dict, analyst: dic
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
-        text = msg.content[0].text.strip()
+        text = _strip_fences(msg.content[0].text.strip())
         return json.loads(text)
     except Exception:
         return None
@@ -274,12 +302,76 @@ def build_future_timestamps(last_ts: pd.Timestamp, interval: str, pred_len: int)
 
 
 def band_label(pct: float) -> str:
-    return "NARROW" if pct < 5 else ("MODERATE" if pct < 10 else "WIDE")
+    return "NARROW" if pct < 3 else ("MODERATE" if pct < 7 else "WIDE")
+
+
+def run_kronos_ensemble(
+    predictor: KronosPredictor,
+    hist: pd.DataFrame,
+    last_ts: pd.Timestamp,
+    interval: str,
+    pred_len: int,
+) -> tuple:
+    """Run SAMPLE_COUNT independent paths; return mean forecast, band_pct, path_std, end_closes."""
+    future_ts = pd.Series(build_future_timestamps(last_ts, interval, pred_len))
+    # Mean path from all samples at once
+    mean_forecast = predictor.predict(
+        df=hist,
+        x_timestamp=pd.Series(hist.index),
+        y_timestamp=future_ts,
+        pred_len=pred_len,
+        T=1.0,
+        top_p=0.9,
+        sample_count=SAMPLE_COUNT,
+    )
+    last_close = float(hist["close"].iloc[-1])
+    # Collect individual end-prices for real dispersion
+    end_closes: list[float] = []
+    for _ in range(SAMPLE_COUNT):
+        f = predictor.predict(
+            df=hist,
+            x_timestamp=pd.Series(hist.index),
+            y_timestamp=future_ts,
+            pred_len=pred_len,
+            T=1.0,
+            top_p=0.9,
+            sample_count=1,
+        )
+        end_closes.append(float(f["close"].iloc[-1]))
+    path_std = float(np.std(end_closes))
+    band_pct = round(path_std / last_close * 100.0, 2)
+    return mean_forecast, band_pct, path_std, end_closes
 
 
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "model": MODEL_ID}
+
+
+@app.get("/search")
+def search(q: str = Query(..., min_length=1, max_length=100)) -> dict:
+    """Proxy Yahoo Finance autocomplete to avoid browser CORS."""
+    url = (
+        f"https://query1.finance.yahoo.com/v1/finance/search"
+        f"?q={q}&quotesCount=7&newsCount=0&listsCount=0&enableFuzzyQuery=false"
+        f"&enableCb=false&enableNavLinks=false&enableEnhancedTrivialQuery=false"
+    )
+    try:
+        r = httpx.get(url, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
+        data = r.json()
+        quotes = [
+            {
+                "symbol": item.get("symbol", ""),
+                "name": item.get("longname") or item.get("shortname") or item.get("symbol", ""),
+                "exchange": item.get("exchange", ""),
+                "type": item.get("quoteType", ""),
+            }
+            for item in data.get("quotes", [])
+            if item.get("symbol")
+        ]
+        return {"quotes": quotes}
+    except Exception as exc:
+        raise HTTPException(502, f"Search proxy error: {exc}")
 
 
 @app.get("/predict")
@@ -306,22 +398,17 @@ def predict(
 
     predictor = get_predictor()
     last_ts = hist.index[-1]
-    forecast = predictor.predict(
-        df=hist,
-        x_timestamp=pd.Series(hist.index),
-        y_timestamp=pd.Series(build_future_timestamps(last_ts, interval, pred_len)),
-        pred_len=pred_len,
-        T=1.0,
-        top_p=0.9,
-        sample_count=1,
+
+    forecast, band_pct, path_std, end_closes = run_kronos_ensemble(
+        predictor, hist, last_ts, interval, pred_len
     )
 
     last_close = round(float(hist["close"].iloc[-1]), 2)
     closes = [round(float(c), 2) for c in forecast["close"]]
     pred_close = closes[-1]
     pct = round((pred_close - last_close) / last_close * 100.0, 2)
-    rng_lo, rng_hi = min(closes), max(closes)
-    band_pct = round((rng_hi - rng_lo) / last_close * 100.0, 2)
+    rng_lo = round(float(np.percentile(end_closes, 10)), 2)
+    rng_hi = round(float(np.percentile(end_closes, 90)), 2)
     direction = "UP" if pct > 0.25 else ("DOWN" if pct < -0.25 else "FLAT")
     blabel = band_label(band_pct)
 
@@ -366,6 +453,9 @@ def predict(
         "direction": direction,
         "band": blabel,
         "band_pct": band_pct,
+        "path_std": round(path_std, 4),
+        "path_std_pct": band_pct,
+        "sample_count": SAMPLE_COUNT,
         "range_low": rng_lo,
         "range_high": rng_hi,
         "history": history_out,
