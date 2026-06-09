@@ -33,6 +33,7 @@ MODEL_ID     = "NeoQuasar/Kronos-small"
 PERIODS      = {"1mo", "3mo", "6mo", "1y", "2y", "5y", "max"}
 INTERVALS    = {"1d", "1h", "4h", "1wk", "1mo"}
 INFO_CACHE_TTL = 86400
+SAMPLE_COUNT = 20  # number of Kronos paths for real uncertainty estimation
 
 app = FastAPI(title="Kronos Forecast API", version="2.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"], allow_headers=["*"])
@@ -93,6 +94,67 @@ def fetch_info(ticker: str) -> dict:
         return cached["data"]
     log.warning("[%s] fetch_info failed: %s", ticker, last_exc)
     return {}
+
+
+def run_kronos_ensemble(
+    predictor: KronosPredictor,
+    hist: pd.DataFrame,
+    last_ts: pd.Timestamp,
+    interval: str,
+    pred_len: int,
+) -> tuple[pd.DataFrame, float, float, list[float]]:
+    """
+    Run Kronos with sample_count=20 paths.
+    Returns:
+      - mean_forecast: averaged OHLC DataFrame (the displayed path)
+      - band_pct: std of end-prices across 20 paths / last_close * 100
+      - path_std_pct: same as band_pct (for display)
+      - end_closes: list of 20 final close prices (for fan chart)
+    """
+    future_ts = pd.Series(build_future_timestamps(last_ts, interval, pred_len))
+
+    # Run 20 independent samples — Kronos handles this internally in one batch
+    forecast = predictor.predict(
+        df=hist,
+        x_timestamp=pd.Series(hist.index),
+        y_timestamp=future_ts,
+        pred_len=pred_len,
+        T=1.0,
+        top_p=0.9,
+        sample_count=SAMPLE_COUNT,
+    )
+    # forecast is the mean path (Kronos averages internally)
+    # To get path dispersion we run individually and collect end prices
+    # Fast approach: run once with sample_count=20, then run 20 individual samples
+    # for dispersion — but that doubles cost. Instead we use the internal API:
+    # predictor._predict_raw returns pre-averaged samples if available.
+    # Since KronosPredictor only exposes the mean, we approximate dispersion
+    # by running sample_count=1 twenty times with different random seeds.
+    last_close = float(hist["close"].iloc[-1])
+    end_closes = []
+    for i in range(SAMPLE_COUNT):
+        try:
+            f = predictor.predict(
+                df=hist,
+                x_timestamp=pd.Series(hist.index),
+                y_timestamp=future_ts,
+                pred_len=pred_len,
+                T=1.0,
+                top_p=0.9,
+                sample_count=1,
+            )
+            end_closes.append(float(f["close"].iloc[-1]))
+        except Exception as e:
+            log.warning("[ensemble] sample %d failed: %s", i, e)
+
+    if not end_closes:
+        end_closes = [float(forecast["close"].iloc[-1])]
+
+    path_std = float(np.std(end_closes))
+    band_pct = round(path_std / last_close * 100.0, 2)
+    log.info("[ensemble] %d paths, end_close mean=%.2f std=%.2f band_pct=%.1f%%",
+             len(end_closes), np.mean(end_closes), path_std, band_pct)
+    return forecast, band_pct, path_std, end_closes
 
 
 def calc_rsi(closes: pd.Series, period: int = 14) -> float:
@@ -262,12 +324,13 @@ def build_future_timestamps(last_ts: pd.Timestamp, interval: str, pred_len: int)
 
 
 def band_label(pct: float) -> str:
-    return "NARROW" if pct < 5 else ("MODERATE" if pct < 10 else "WIDE")
+    """Band based on path dispersion (std of 20 end-prices)."""
+    return "NARROW" if pct < 3 else ("MODERATE" if pct < 7 else "WIDE")
 
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "model": MODEL_ID}
+    return {"status": "ok", "model": MODEL_ID, "sample_count": SAMPLE_COUNT}
 
 
 @app.get("/search")
@@ -314,22 +377,21 @@ def predict(
 
     predictor = get_predictor()
     last_ts = hist.index[-1]
-    forecast = predictor.predict(
-        df=hist,
-        x_timestamp=pd.Series(hist.index),
-        y_timestamp=pd.Series(build_future_timestamps(last_ts, interval, pred_len)),
-        pred_len=pred_len,
-        T=1.0,
-        top_p=0.9,
-        sample_count=1,
+
+    # Run 20-path ensemble for real uncertainty estimation
+    forecast, band_pct, path_std, end_closes = run_kronos_ensemble(
+        predictor, hist, last_ts, interval, pred_len
     )
 
     last_close = round(float(hist["close"].iloc[-1]), 2)
     closes = [round(float(c), 2) for c in forecast["close"]]
     pred_close = closes[-1]
     pct = round((pred_close - last_close) / last_close * 100.0, 2)
-    rng_lo, rng_hi = min(closes), max(closes)
-    band_pct = round((rng_hi - rng_lo) / last_close * 100.0, 2)
+
+    # Range from actual path dispersion across 20 samples
+    rng_lo = round(float(np.percentile(end_closes, 10)), 2)
+    rng_hi = round(float(np.percentile(end_closes, 90)), 2)
+
     direction = "UP" if pct > 0.25 else ("DOWN" if pct < -0.25 else "FLAT")
     blabel = band_label(band_pct)
 
@@ -374,6 +436,8 @@ def predict(
         "band_pct": band_pct,
         "range_low": rng_lo,
         "range_high": rng_hi,
+        "path_std_pct": round(path_std / last_close * 100, 2),
+        "sample_count": len(end_closes),
         "history": history_out,
         "forecast": forecast_out,
         "indicators": indicators,
