@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
-"""Kronos forecast API — with indicators, analyst data, and Claude narrative.
-
-  GET /health
-  GET /predict?ticker=&period=&interval=&pred_len=&history_points=
-
-Set ANTHROPIC_API_KEY env var to enable narrative generation.
-"""
+"""Kronos forecast API — with indicators, analyst data, and Claude narrative."""
 
 from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 import time
 import random
@@ -69,7 +64,7 @@ def fetch_with_retry(ticker: str, period: str, interval: str, max_attempts: int 
 def fetch_info(ticker: str) -> dict:
     try:
         info = yf.Ticker(ticker).info or {}
-        log.info("[%s] fetch_info keys: %s", ticker, list(info.keys())[:15])
+        log.info("[%s] fetch_info ok, keys: %s", ticker, list(info.keys())[:10])
         return info
     except Exception as e:
         log.warning("[%s] fetch_info failed: %s", ticker, e)
@@ -93,8 +88,7 @@ def calc_macd(closes: pd.Series) -> dict:
     macd_line = ema12 - ema26
     signal = macd_line.ewm(span=9, adjust=False).mean()
     hist = macd_line - signal
-    is_bull = bool(hist.iloc[-1] > 0)
-    return {"bull": is_bull, "histogram": round(float(hist.iloc[-1]), 4)}
+    return {"bull": bool(hist.iloc[-1] > 0), "histogram": round(float(hist.iloc[-1]), 4)}
 
 
 def build_indicators(hist: pd.DataFrame, info: dict, kronos_pct: float, kronos_band: str) -> dict:
@@ -106,19 +100,15 @@ def build_indicators(hist: pd.DataFrame, info: dict, kronos_pct: float, kronos_b
     ma200 = closes.rolling(200).mean().iloc[-1] if len(closes) >= 200 else None
     last  = closes.iloc[-1]
     if ma50 is not None and ma200 is not None:
-        above50  = last > ma50
-        above200 = last > ma200
-        golden    = ma50 > ma200
+        above50, above200, golden = last > ma50, last > ma200, ma50 > ma200
         side = "bull" if (above50 and above200 and golden) else ("bear" if (not above50 and not above200) else "neutral")
         score += 1 if side == "bull" else (-1 if side == "bear" else 0)
         val = "Above 50/200" if (above50 and above200) else ("Below 50/200" if (not above50 and not above200) else "Mixed")
-        pills.append({"name": "Long-term Trend", "value": val,
-                      "sub": f"50d ${ma50:.0f}  200d ${ma200:.0f}", "side": side})
+        pills.append({"name": "Long-term Trend", "value": val, "sub": f"50d ${ma50:.0f}  200d ${ma200:.0f}", "side": side})
     elif ma50 is not None:
         side = "bull" if last > ma50 else "bear"
         score += 1 if side == "bull" else -1
-        pills.append({"name": "Long-term Trend", "value": "Above 50d" if side == "bull" else "Below 50d",
-                      "sub": f"50d ${ma50:.0f}  (200d N/A)", "side": side})
+        pills.append({"name": "Long-term Trend", "value": "Above 50d" if side == "bull" else "Below 50d", "sub": f"50d ${ma50:.0f}  (200d N/A)", "side": side})
     else:
         pills.append({"name": "Long-term Trend", "value": "N/A", "sub": "Not enough data", "side": "neutral"})
 
@@ -126,19 +116,14 @@ def build_indicators(hist: pd.DataFrame, info: dict, kronos_pct: float, kronos_b
         m = calc_macd(closes)
         side = "bull" if m["bull"] else "bear"
         score += 1 if side == "bull" else -1
-        pills.append({"name": "MACD", "value": "Bullish" if m["bull"] else "Bearish",
-                      "sub": f"Histogram {m['histogram']:+.4f}", "side": side})
+        pills.append({"name": "MACD", "value": "Bullish" if m["bull"] else "Bearish", "sub": f"Histogram {m['histogram']:+.4f}", "side": side})
     else:
         pills.append({"name": "MACD", "value": "N/A", "sub": "Not enough data", "side": "neutral"})
 
     if len(closes) >= 16:
         rsi = calc_rsi(closes)
-        if rsi >= 70:
-            side, label = "bear", "Overbought"
-        elif rsi <= 30:
-            side, label = "bull", "Oversold"
-        else:
-            side, label = "neutral", "Neutral"
+        side = "bear" if rsi >= 70 else ("bull" if rsi <= 30 else "neutral")
+        label = "Overbought" if rsi >= 70 else ("Oversold" if rsi <= 30 else "Neutral")
         score += 1 if side == "bull" else (-1 if side == "bear" else 0)
         pills.append({"name": "RSI (14)", "value": label, "sub": f"RSI = {rsi}", "side": side})
     else:
@@ -147,29 +132,19 @@ def build_indicators(hist: pd.DataFrame, info: dict, kronos_pct: float, kronos_b
     pe = info.get("trailingPE") or info.get("forwardPE")
     pe_type = "trailing" if info.get("trailingPE") else "forward"
     if pe and pe > 0:
-        if pe < 15:
-            side, label = "bull", "Cheap"
-        elif pe > 40:
-            side, label = "bear", "Expensive"
-        else:
-            side, label = "neutral", "Fair"
+        side = "bull" if pe < 15 else ("bear" if pe > 40 else "neutral")
+        label = "Cheap" if pe < 15 else ("Expensive" if pe > 40 else "Fair")
         score += 1 if side == "bull" else (-1 if side == "bear" else 0)
-        pills.append({"name": "Valuation", "value": label,
-                      "sub": f"{pe_type} P/E {pe:.1f}x", "side": side})
+        pills.append({"name": "Valuation", "value": label, "sub": f"{pe_type} P/E {pe:.1f}x", "side": side})
     else:
         pills.append({"name": "Valuation", "value": "N/A", "sub": "P/E unavailable", "side": "neutral"})
 
     rev_growth = info.get("revenueGrowth")
     if rev_growth is not None:
-        if rev_growth >= 0.15:
-            side, label = "bull", "Strong growth"
-        elif rev_growth < 0:
-            side, label = "bear", "Declining"
-        else:
-            side, label = "neutral", "Moderate"
+        side = "bull" if rev_growth >= 0.15 else ("bear" if rev_growth < 0 else "neutral")
+        label = "Strong growth" if rev_growth >= 0.15 else ("Declining" if rev_growth < 0 else "Moderate")
         score += 1 if side == "bull" else (-1 if side == "bear" else 0)
-        pills.append({"name": "Fundamentals", "value": label,
-                      "sub": f"Rev growth {rev_growth*100:.1f}%", "side": side})
+        pills.append({"name": "Fundamentals", "value": label, "sub": f"Rev growth {rev_growth*100:.1f}%", "side": side})
     else:
         pills.append({"name": "Fundamentals", "value": "N/A", "sub": "Revenue data N/A", "side": "neutral"})
 
@@ -178,14 +153,12 @@ def build_indicators(hist: pd.DataFrame, info: dict, kronos_pct: float, kronos_b
         score += 1 if side == "bull" else (-1 if side == "bear" else 0)
         label = "Bullish" if side == "bull" else ("Bearish" if side == "bear" else "Flat")
     elif kronos_band == "MODERATE":
-        side = "neutral"
-        label = "Uncertain"
+        side, label = "neutral", "Uncertain"
     else:
         side = "bear" if kronos_pct < -5 else "neutral"
         score += -1 if side == "bear" else 0
         label = "High uncertainty"
-    pills.append({"name": "Kronos 30d", "value": label,
-                  "sub": f"{kronos_pct:+.1f}%  band {kronos_band}", "side": side})
+    pills.append({"name": "Kronos 30d", "value": label, "sub": f"{kronos_pct:+.1f}%  band {kronos_band}", "side": side})
 
     call = "BUY" if score >= 2.5 else ("SELL" if score <= -2.5 else "HOLD")
     return {"pills": pills, "call": call, "score": round(score, 1)}
@@ -195,24 +168,31 @@ def fetch_analyst(info: dict, last_close: float) -> dict:
     rec = info.get("recommendationKey", "")
     target = info.get("targetMeanPrice")
     upside = round((target - last_close) / last_close * 100, 1) if target and last_close else None
-    num_analysts = info.get("numberOfAnalystOpinions")
     result = {
         "consensus": rec.replace("_", " ").title() if rec else "N/A",
         "target": round(float(target), 2) if target else None,
         "upside": upside,
-        "num_analysts": num_analysts,
+        "num_analysts": info.get("numberOfAnalystOpinions"),
     }
-    log.info("[analyst] recommendationKey=%r targetMeanPrice=%r result=%s", rec, target, result)
+    log.info("[analyst] rec=%r target=%r -> %s", rec, target, result)
     return result
+
+
+def _strip_fences(text: str) -> str:
+    """Remove ```json ... ``` or ``` ... ``` markdown fences if present."""
+    text = text.strip()
+    text = re.sub(r'^```(?:json)?\s*', '', text)
+    text = re.sub(r'\s*```$', '', text)
+    return text.strip()
 
 
 def generate_narrative(ticker: str, company: str, indicators: dict, analyst: dict,
                        last_close: float, pred_close: float, pct: float) -> dict | None:
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
-        log.warning("[narrative] ANTHROPIC_API_KEY not set — skipping narrative")
+        log.warning("[narrative] ANTHROPIC_API_KEY not set")
         return None
-    log.info("[narrative] calling Claude for %s (key present, len=%d)", ticker, len(api_key))
+    log.info("[narrative] calling Claude for %s", ticker)
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
@@ -229,19 +209,19 @@ def generate_narrative(ticker: str, company: str, indicators: dict, analyst: dic
             f"Analyst consensus: {analyst['consensus']} | Target: "
             f"{'$'+str(analyst['target']) if analyst['target'] else 'N/A'} "
             f"(upside {analyst['upside']}%)\n\n"
-            f"Respond with ONLY valid JSON (no markdown) matching this exact schema:\n"
-            '{"headline":"<10-word bold thesis>","subhead":"<20-word supporting context>",'
+            f"Respond with ONLY raw JSON, no markdown fences, matching this schema:\n"
+            '{"headline":"<10-word thesis>","subhead":"<20-word context>",'
             '"bear_bullets":["<risk 1>","<risk 2>","<risk 3>"],'
             '"bull_bullets":["<catalyst 1>","<catalyst 2>","<catalyst 3>"],'
-            '"action":"<1-2 sentence tactical suggestion>"}'
+            '"action":"<1-2 sentence suggestion>"}'
         )
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
-        text = msg.content[0].text.strip()
-        log.info("[narrative] Claude response: %s", text[:120])
+        text = _strip_fences(msg.content[0].text)
+        log.info("[narrative] response (stripped): %s", text[:120])
         return json.loads(text)
     except Exception as e:
         log.error("[narrative] failed: %s", e, exc_info=True)
@@ -249,18 +229,12 @@ def generate_narrative(ticker: str, company: str, indicators: dict, analyst: dic
 
 
 def build_future_timestamps(last_ts: pd.Timestamp, interval: str, pred_len: int) -> pd.DatetimeIndex:
-    if interval == "1d":
-        delta = pd.Timedelta(days=1)
-    elif interval == "1wk":
-        delta = pd.Timedelta(weeks=1)
-    elif interval == "1mo":
-        delta = pd.DateOffset(months=1)
-    elif interval.endswith("h"):
-        delta = pd.Timedelta(hours=int(interval.rstrip("h")))
-    elif interval.endswith("m"):
-        delta = pd.Timedelta(minutes=int(interval.rstrip("m")))
-    else:
-        delta = pd.Timedelta(days=1)
+    if interval == "1d":       delta = pd.Timedelta(days=1)
+    elif interval == "1wk":    delta = pd.Timedelta(weeks=1)
+    elif interval == "1mo":    delta = pd.DateOffset(months=1)
+    elif interval.endswith("h"): delta = pd.Timedelta(hours=int(interval.rstrip("h")))
+    elif interval.endswith("m"): delta = pd.Timedelta(minutes=int(interval.rstrip("m")))
+    else:                       delta = pd.Timedelta(days=1)
     return pd.DatetimeIndex([last_ts + delta * (i + 1) for i in range(pred_len)])
 
 
@@ -333,8 +307,7 @@ def predict(
 
     info = fetch_info(ticker)
     company = info.get("shortName") or info.get("longName") or ticker
-    exchange_map = {"NMS": "NASDAQ", "NYQ": "NYSE", "NGM": "NASDAQ", "PCX": "NYSE Arca",
-                   "BTS": "BATS", "ASE": "AMEX"}
+    exchange_map = {"NMS": "NASDAQ", "NYQ": "NYSE", "NGM": "NASDAQ", "PCX": "NYSE Arca", "BTS": "BATS", "ASE": "AMEX"}
     exchange = exchange_map.get(info.get("exchange", ""), info.get("exchange", ""))
 
     indicators = build_indicators(hist, info, pct, blabel)
