@@ -31,9 +31,13 @@ TOKENIZER_ID = "NeoQuasar/Kronos-Tokenizer-base"
 MODEL_ID     = "NeoQuasar/Kronos-small"
 PERIODS      = {"1mo", "3mo", "6mo", "1y", "2y", "5y", "max"}
 INTERVALS    = {"1d", "1h", "4h", "1wk", "1mo"}
+INFO_CACHE_TTL = 86400  # 24 hours
 
 app = FastAPI(title="Kronos Forecast API", version="2.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"], allow_headers=["*"])
+
+# {ticker: {"data": {...}, "ts": float}}
+_info_cache: dict[str, dict] = {}
 
 
 @lru_cache(maxsize=1)
@@ -62,13 +66,40 @@ def fetch_with_retry(ticker: str, period: str, interval: str, max_attempts: int 
 
 
 def fetch_info(ticker: str) -> dict:
-    try:
-        info = yf.Ticker(ticker).info or {}
-        log.info("[%s] fetch_info ok, keys: %s", ticker, list(info.keys())[:10])
-        return info
-    except Exception as e:
-        log.warning("[%s] fetch_info failed: %s", ticker, e)
-        return {}
+    """Fetch yfinance .info with retry and 24h in-memory cache."""
+    # return cached if still fresh
+    cached = _info_cache.get(ticker)
+    if cached and (time.time() - cached["ts"]) < INFO_CACHE_TTL:
+        log.info("[%s] fetch_info from cache", ticker)
+        return cached["data"]
+
+    last_exc = None
+    for attempt in range(4):
+        try:
+            info = yf.Ticker(ticker).info or {}
+            if info:
+                _info_cache[ticker] = {"data": info, "ts": time.time()}
+                log.info("[%s] fetch_info ok (attempt %d)", ticker, attempt + 1)
+                return info
+        except Exception as e:
+            msg = str(e).lower()
+            if "rate limit" in msg or "429" in msg or "too many" in msg:
+                last_exc = e
+                wait = (2 ** attempt) + random.uniform(0, 1)
+                log.warning("[%s] fetch_info rate-limited, retrying in %.1fs", ticker, wait)
+                time.sleep(wait)
+            else:
+                log.warning("[%s] fetch_info error: %s", ticker, e)
+                break
+
+    # fall back to stale cache if available
+    if cached:
+        log.warning("[%s] fetch_info using stale cache (age %.0fh)", ticker,
+                    (time.time() - cached["ts"]) / 3600)
+        return cached["data"]
+
+    log.warning("[%s] fetch_info failed, returning empty: %s", ticker, last_exc)
+    return {}
 
 
 def calc_rsi(closes: pd.Series, period: int = 14) -> float:
@@ -179,7 +210,6 @@ def fetch_analyst(info: dict, last_close: float) -> dict:
 
 
 def _strip_fences(text: str) -> str:
-    """Remove ```json ... ``` or ``` ... ``` markdown fences if present."""
     text = text.strip()
     text = re.sub(r'^```(?:json)?\s*', '', text)
     text = re.sub(r'\s*```$', '', text)
@@ -221,7 +251,7 @@ def generate_narrative(ticker: str, company: str, indicators: dict, analyst: dic
             messages=[{"role": "user", "content": prompt}],
         )
         text = _strip_fences(msg.content[0].text)
-        log.info("[narrative] response (stripped): %s", text[:120])
+        log.info("[narrative] ok: %s", text[:80])
         return json.loads(text)
     except Exception as e:
         log.error("[narrative] failed: %s", e, exc_info=True)
@@ -229,12 +259,12 @@ def generate_narrative(ticker: str, company: str, indicators: dict, analyst: dic
 
 
 def build_future_timestamps(last_ts: pd.Timestamp, interval: str, pred_len: int) -> pd.DatetimeIndex:
-    if interval == "1d":       delta = pd.Timedelta(days=1)
-    elif interval == "1wk":    delta = pd.Timedelta(weeks=1)
-    elif interval == "1mo":    delta = pd.DateOffset(months=1)
+    if interval == "1d":         delta = pd.Timedelta(days=1)
+    elif interval == "1wk":      delta = pd.Timedelta(weeks=1)
+    elif interval == "1mo":      delta = pd.DateOffset(months=1)
     elif interval.endswith("h"): delta = pd.Timedelta(hours=int(interval.rstrip("h")))
     elif interval.endswith("m"): delta = pd.Timedelta(minutes=int(interval.rstrip("m")))
-    else:                       delta = pd.Timedelta(days=1)
+    else:                        delta = pd.Timedelta(days=1)
     return pd.DatetimeIndex([last_ts + delta * (i + 1) for i in range(pred_len)])
 
 
